@@ -1,0 +1,664 @@
+<?php
+session_start();
+
+// Check if user is logged in and is an admin
+if (!isset($_SESSION['user_id']) || !isset($_SESSION['role']) || $_SESSION['role'] !== 'admin') {
+    header("Location: login.php");
+    exit;
+}
+
+// Include database connection
+require_once '../config/db.php';
+
+// Initialize variables
+$message = '';
+$messageType = '';
+
+// Get current settings
+$settings = [];
+$query = "SELECT * FROM settings";
+$result = $conn->query($query);
+
+if ($result && $result->num_rows > 0) {
+    while ($row = $result->fetch_assoc()) {
+        $settings[$row['setting_name']] = $row['setting_value'];
+    }
+}
+
+// Default values if settings don't exist
+$businessName = $settings['business_name'] ?? 'Walizone Autotech Enterprise';
+$businessEmail = $settings['business_email'] ?? 'mwakamule@gmail.com';
+$businessPhone = $settings['business_phone'] ?? '0976664017';
+$businessAddress = $settings['business_address'] ?? 'Chinsali, Shambalakale Road, opposite Jesims Lodge';
+$businessHours = $settings['business_hours'] ?? 'Mon-Sat: 8:00AM - 5:00PM';
+$aboutUs = $settings['about_us'] ?? 'Established in 2003, Walizone Autotech Enterprise has been providing reliable, affordable, and high-quality automotive solutions to the Chinsali community and beyond.';
+$facebookUrl = $settings['facebook_url'] ?? '';
+$twitterUrl = $settings['twitter_url'] ?? '';
+$instagramUrl = $settings['instagram_url'] ?? '';
+$linkedinUrl = $settings['linkedin_url'] ?? '';
+
+// Handle form submission
+if ($_SERVER['REQUEST_METHOD'] === 'POST') {
+    // Business Information
+    if (isset($_POST['update_business_info'])) {
+        $businessName = trim($_POST['business_name']);
+        $businessEmail = trim($_POST['business_email']);
+        $businessPhone = trim($_POST['business_phone']);
+        $businessAddress = trim($_POST['business_address']);
+        $businessHours = trim($_POST['business_hours']);
+        $aboutUs = trim($_POST['about_us']);
+        
+        // Update settings in database
+        $settingsToUpdate = [
+            'business_name' => $businessName,
+            'business_email' => $businessEmail,
+            'business_phone' => $businessPhone,
+            'business_address' => $businessAddress,
+            'business_hours' => $businessHours,
+            'about_us' => $aboutUs
+        ];
+        
+        $success = true;
+        foreach ($settingsToUpdate as $key => $value) {
+            // Check if setting exists
+            $checkStmt = $conn->prepare("SELECT COUNT(*) as count FROM settings WHERE setting_key = ?");
+            $checkStmt->bind_param("s", $key);
+            $checkStmt->execute();
+            $checkResult = $checkStmt->get_result();
+            $exists = $checkResult->fetch_assoc()['count'] > 0;
+            $checkStmt->close();
+            
+            if ($exists) {
+                // Update existing setting
+                $stmt = $conn->prepare("UPDATE settings SET setting_value = ? WHERE setting_key = ?");
+                $stmt->bind_param("ss", $value, $key);
+            } else {
+                // Insert new setting
+                $stmt = $conn->prepare("INSERT INTO settings (setting_key, setting_value) VALUES (?, ?)");
+                $stmt->bind_param("ss", $key, $value);
+            }
+            
+            if (!$stmt->execute()) {
+                $success = false;
+                $message = 'Error updating settings: ' . $conn->error;
+                $messageType = 'error';
+                break;
+            }
+            
+            $stmt->close();
+        }
+        
+        if ($success) {
+            $message = 'Business information updated successfully';
+            $messageType = 'success';
+        }
+    }
+    
+    // Social Media Links
+    if (isset($_POST['update_social_media'])) {
+        $facebookUrl = trim($_POST['facebook_url']);
+        $twitterUrl = trim($_POST['twitter_url']);
+        $instagramUrl = trim($_POST['instagram_url']);
+        $linkedinUrl = trim($_POST['linkedin_url']);
+        
+        // Update settings in database
+        $settingsToUpdate = [
+            'facebook_url' => $facebookUrl,
+            'twitter_url' => $twitterUrl,
+            'instagram_url' => $instagramUrl,
+            'linkedin_url' => $linkedinUrl
+        ];
+        
+        $success = true;
+        foreach ($settingsToUpdate as $key => $value) {
+            // Check if setting exists
+            $checkStmt = $conn->prepare("SELECT COUNT(*) as count FROM settings WHERE setting_key = ?");
+            $checkStmt->bind_param("s", $key);
+            $checkStmt->execute();
+            $checkResult = $checkStmt->get_result();
+            $exists = $checkResult->fetch_assoc()['count'] > 0;
+            $checkStmt->close();
+            
+            if ($exists) {
+                // Update existing setting
+                $stmt = $conn->prepare("UPDATE settings SET setting_value = ? WHERE setting_key = ?");
+                $stmt->bind_param("ss", $value, $key);
+            } else {
+                // Insert new setting
+                $stmt = $conn->prepare("INSERT INTO settings (setting_key, setting_value) VALUES (?, ?)");
+                $stmt->bind_param("ss", $key, $value);
+            }
+            
+            if (!$stmt->execute()) {
+                $success = false;
+                $message = 'Error updating social media links: ' . $conn->error;
+                $messageType = 'error';
+                break;
+            }
+            
+            $stmt->close();
+        }
+        
+        if ($success) {
+            $message = 'Social media links updated successfully';
+            $messageType = 'success';
+        }
+    }
+    
+    // Change Password
+    if (isset($_POST['change_password'])) {
+        $currentPassword = $_POST['current_password'];
+        $newPassword = $_POST['new_password'];
+        $confirmPassword = $_POST['confirm_password'];
+        
+        // Validate inputs
+        if (empty($currentPassword) || empty($newPassword) || empty($confirmPassword)) {
+            $message = 'All password fields are required';
+            $messageType = 'error';
+        } elseif ($newPassword !== $confirmPassword) {
+            $message = 'New password and confirm password do not match';
+            $messageType = 'error';
+        } elseif (strlen($newPassword) < 6) {
+            $message = 'New password must be at least 6 characters long';
+            $messageType = 'error';
+        } else {
+            // Verify current password
+            $stmt = $conn->prepare("SELECT password FROM users WHERE id = ?");
+            $stmt->bind_param("i", $_SESSION['user_id']);
+            $stmt->execute();
+            $result = $stmt->get_result();
+            
+            if ($result->num_rows === 1) {
+                $user = $result->fetch_assoc();
+                
+                if (password_verify($currentPassword, $user['password'])) {
+                    // Update password
+                    $hashedPassword = password_hash($newPassword, PASSWORD_DEFAULT);
+                    $updateStmt = $conn->prepare("UPDATE users SET password = ? WHERE id = ?");
+                    $updateStmt->bind_param("si", $hashedPassword, $_SESSION['user_id']);
+                    
+                    if ($updateStmt->execute()) {
+                        $message = 'Password changed successfully';
+                        $messageType = 'success';
+                    } else {
+                        $message = 'Error changing password: ' . $conn->error;
+                        $messageType = 'error';
+                    }
+                    
+                    $updateStmt->close();
+                } else {
+                    $message = 'Current password is incorrect';
+                    $messageType = 'error';
+                }
+            } else {
+                $message = 'User not found';
+                $messageType = 'error';
+            }
+            
+            $stmt->close();
+        }
+    }
+}
+?>
+
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Settings - Walizone Autotech Admin</title>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0-beta3/css/all.min.css">
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+        }
+        
+        body {
+            display: flex;
+            background-color: #f0f0f0;
+            min-height: 100vh;
+        }
+        
+        /* Sidebar */
+        .sidebar {
+            width: 250px;
+            background-color: #0d47a1;
+            color: white;
+            height: 100vh;
+            position: fixed;
+            padding: 1rem;
+            overflow-y: auto;
+        }
+        
+        .sidebar-header {
+            padding: 1rem 0;
+            text-align: center;
+            border-bottom: 1px solid #1565c0;
+            margin-bottom: 1rem;
+        }
+        
+        .sidebar-menu {
+            list-style: none;
+        }
+        
+        .sidebar-menu li {
+            margin-bottom: 0.5rem;
+        }
+        
+        .sidebar-menu a {
+            color: white;
+            text-decoration: none;
+            display: block;
+            padding: 0.75rem;
+            border-radius: 5px;
+            transition: background 0.3s;
+        }
+        
+        .sidebar-menu a:hover, .sidebar-menu a.active {
+            background-color: #1565c0;
+        }
+        
+        .sidebar-menu i {
+            margin-right: 0.5rem;
+            width: 20px;
+            text-align: center;
+        }
+        
+        /* Main Content */
+        .main-content {
+            flex: 1;
+            margin-left: 250px;
+            padding: 2rem;
+        }
+        
+        .header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 2rem;
+        }
+        
+        .user-info {
+            display: flex;
+            align-items: center;
+        }
+        
+        .user-info img {
+            width: 40px;
+            height: 40px;
+            border-radius: 50%;
+            margin-right: 1rem;
+        }
+        
+        /* Alert Messages */
+        .alert {
+            padding: 1rem;
+            border-radius: 5px;
+            margin-bottom: 1.5rem;
+        }
+        
+        .alert-success {
+            background-color: #e8f5e9;
+            color: #388e3c;
+            border: 1px solid #c8e6c9;
+        }
+        
+        .alert-error {
+            background-color: #ffebee;
+            color: #d32f2f;
+            border: 1px solid #ffcdd2;
+        }
+        
+        /* Settings Tabs */
+        .settings-tabs {
+            display: flex;
+            margin-bottom: 2rem;
+            background-color: white;
+            border-radius: 10px;
+            overflow: hidden;
+            box-shadow: 0 2px 10px rgba(0, 0, 0, 0.1);
+        }
+        
+        .tab-button {
+            flex: 1;
+            padding: 1rem;
+            text-align: center;
+            background-color: white;
+            border: none;
+            cursor: pointer;
+            font-weight: 500;
+            color: #666;
+            transition: all 0.3s;
+            border-bottom: 3px solid transparent;
+        }
+        
+        .tab-button:hover {
+            background-color: #f5f5f5;
+        }
+        
+        .tab-button.active {
+            color: #0d47a1;
+            border-bottom-color: #0d47a1;
+            background-color: #f5f5f5;
+        }
+        
+        .tab-button i {
+            margin-right: 0.5rem;
+        }
+        
+        /* Settings Content */
+        .settings-content {
+            background-color: white;
+            border-radius: 10px;
+            padding: 2rem;
+            box-shadow: 0 2px 10px rgba(0, 0, 0, 0.1);
+        }
+        
+        .tab-content {
+            display: none;
+        }
+        
+        .tab-content.active {
+            display: block;
+        }
+        
+        .settings-section {
+            margin-bottom: 2rem;
+        }
+        
+        .settings-section:last-child {
+            margin-bottom: 0;
+        }
+        
+        .settings-title {
+            font-size: 1.5rem;
+            color: #0d47a1;
+            margin-bottom: 1.5rem;
+            padding-bottom: 0.5rem;
+            border-bottom: 1px solid #eee;
+        }
+        
+        .form-group {
+            margin-bottom: 1.5rem;
+        }
+        
+        .form-group label {
+            display: block;
+            margin-bottom: 0.5rem;
+            font-weight: 500;
+        }
+        
+        .form-control {
+            width: 100%;
+            padding: 0.75rem;
+            border: 1px solid #ddd;
+            border-radius: 5px;
+            font-size: 1rem;
+        }
+        
+        .form-control:focus {
+            outline: none;
+            border-color: #0d47a1;
+        }
+        
+        textarea.form-control {
+            min-height: 100px;
+            resize: vertical;
+        }
+        
+        .btn {
+            display: inline-block;
+            padding: 0.75rem 1.5rem;
+            border: none;
+            border-radius: 5px;
+            cursor: pointer;
+            font-size: 1rem;
+            font-weight: 500;
+            text-align: center;
+            text-decoration: none;
+            transition: background 0.3s;
+        }
+        
+        .btn-primary {
+            background-color: #0d47a1;
+            color: white;
+        }
+        
+        .btn-primary:hover {
+            background-color: #1565c0;
+        }
+        
+        /* Responsive Styles */
+        @media (max-width: 768px) {
+            .sidebar {
+                width: 70px;
+                padding: 0.5rem;
+            }
+            
+            .sidebar-header h2 {
+                display: none;
+            }
+            
+            .sidebar-menu a span {
+                display: none;
+            }
+            
+            .sidebar-menu i {
+                margin-right: 0;
+                font-size: 1.25rem;
+            }
+            
+            .main-content {
+                margin-left: 70px;
+                padding: 1rem;
+            }
+            
+            .settings-tabs {
+                flex-direction: column;
+            }
+            
+            .tab-button {
+                border-bottom: none;
+                border-left: 3px solid transparent;
+                text-align: left;
+            }
+            
+            .tab-button.active {
+                border-bottom-color: transparent;
+                border-left-color: #0d47a1;
+            }
+        }
+    </style>
+</head>
+<body>
+    <!-- Sidebar -->
+    <div class="sidebar">
+        <div class="sidebar-header">
+            <h2>Walizone Admin</h2>
+        </div>
+        <ul class="sidebar-menu">
+            <li><a href="index.php"><i class="fas fa-tachometer-alt"></i> <span>Dashboard</span></a></li>
+            <li><a href="messages.php"><i class="fas fa-envelope"></i> <span>Messages</span></a></li>
+            <li><a href="appointments.php"><i class="fas fa-calendar-check"></i> <span>Appointments</span></a></li>
+            <li><a href="services.php"><i class="fas fa-wrench"></i> <span>Services</span></a></li>
+            <li><a href="vehicles.php"><i class="fas fa-car"></i> <span>Vehicles</span></a></li>
+            <li><a href="customers.php"><i class="fas fa-users"></i> <span>Customers</span></a></li>
+            <li><a href="settings.php" class="active"><i class="fas fa-cog"></i> <span>Settings</span></a></li>
+            <li><a href="logout.php"><i class="fas fa-sign-out-alt"></i> <span>Logout</span></a></li>
+        </ul>
+    </div>
+    
+    <!-- Main Content -->
+    <div class="main-content">
+        <div class="header">
+            <h1>Settings</h1>
+            <div class="user-info">
+                <img src="https://via.placeholder.com/40" alt="Admin">
+                <span>Welcome, <?php echo htmlspecialchars($_SESSION['username']); ?></span>
+            </div>
+        </div>
+        
+        <?php if (!empty($message)): ?>
+            <div class="alert alert-<?php echo $messageType; ?>">
+                <?php echo htmlspecialchars($message); ?>
+            </div>
+        <?php endif; ?>
+        
+        <!-- Settings Tabs -->
+        <div class="settings-tabs">
+            <button class="tab-button active" data-tab="business-info">
+                <i class="fas fa-building"></i> Business Information
+            </button>
+            <button class="tab-button" data-tab="social-media">
+                <i class="fas fa-share-alt"></i> Social Media
+            </button>
+            <button class="tab-button" data-tab="account">
+                <i class="fas fa-user-shield"></i> Account Settings
+            </button>
+        </div>
+        
+        <!-- Settings Content -->
+        <div class="settings-content">
+            <!-- Business Information Tab -->
+            <div class="tab-content active" id="business-info">
+                <div class="settings-section">
+                    <h2 class="settings-title">Business Information</h2>
+                    <form method="POST" action="settings.php">
+                        <div class="form-group">
+                            <label for="business_name">Business Name</label>
+                            <input type="text" id="business_name" name="business_name" class="form-control" value="<?php echo htmlspecialchars($businessName); ?>" required>
+                        </div>
+                        
+                        <div class="form-group">
+                            <label for="business_email">Business Email</label>
+                            <input type="email" id="business_email" name="business_email" class="form-control" value="<?php echo htmlspecialchars($businessEmail); ?>" required>
+                        </div>
+                        
+                        <div class="form-group">
+                            <label for="business_phone">Business Phone</label>
+                            <input type="text" id="business_phone" name="business_phone" class="form-control" value="<?php echo htmlspecialchars($businessPhone); ?>" required>
+                        </div>
+                        
+                        <div class="form-group">
+                            <label for="business_address">Business Address</label>
+                            <input type="text" id="business_address" name="business_address" class="form-control" value="<?php echo htmlspecialchars($businessAddress); ?>" required>
+                        </div>
+                        
+                        <div class="form-group">
+                            <label for="business_hours">Business Hours</label>
+                            <input type="text" id="business_hours" name="business_hours" class="form-control" value="<?php echo htmlspecialchars($businessHours); ?>" required>
+                        </div>
+                        
+                        <div class="form-group">
+                            <label for="about_us">About Us</label>
+                            <textarea id="about_us" name="about_us" class="form-control"><?php echo htmlspecialchars($aboutUs); ?></textarea>
+                        </div>
+                        
+                        <button type="submit" name="update_business_info" class="btn btn-primary">
+                            <i class="fas fa-save"></i> Save Changes
+                        </button>
+                    </form>
+                </div>
+            </div>
+            
+            <!-- Social Media Tab -->
+            <div class="tab-content" id="social-media">
+                <div class="settings-section">
+                    <h2 class="settings-title">Social Media Links</h2>
+                    <form method="POST" action="settings.php">
+                        <div class="form-group">
+                            <label for="facebook_url">Facebook URL</label>
+                            <input type="url" id="facebook_url" name="facebook_url" class="form-control" value="<?php echo htmlspecialchars($facebookUrl); ?>" placeholder="https://facebook.com/yourpage">
+                        </div>
+                        
+                        <div class="form-group">
+                            <label for="twitter_url">Twitter URL</label>
+                            <input type="url" id="twitter_url" name="twitter_url" class="form-control" value="<?php echo htmlspecialchars($twitterUrl); ?>" placeholder="https://twitter.com/yourhandle">
+                        </div>
+                        
+                        <div class="form-group">
+                            <label for="instagram_url">Instagram URL</label>
+                            <input type="url" id="instagram_url" name="instagram_url" class="form-control" value="<?php echo htmlspecialchars($instagramUrl); ?>" placeholder="https://instagram.com/yourprofile">
+                        </div>
+                        
+                        <div class="form-group">
+                            <label for="linkedin_url">LinkedIn URL</label>
+                            <input type="url" id="linkedin_url" name="linkedin_url" class="form-control" value="<?php echo htmlspecialchars($linkedinUrl); ?>" placeholder="https://linkedin.com/company/yourcompany">
+                        </div>
+                        
+                        <button type="submit" name="update_social_media" class="btn btn-primary">
+                            <i class="fas fa-save"></i> Save Changes
+                        </button>
+                    </form>
+                </div>
+            </div>
+            
+            <!-- Account Settings Tab -->
+            <div class="tab-content" id="account">
+                <div class="settings-section">
+                    <h2 class="settings-title">Change Password</h2>
+                    <form method="POST" action="settings.php">
+                        <div class="form-group">
+                            <label for="current_password">Current Password</label>
+                            <input type="password" id="current_password" name="current_password" class="form-control" required>
+                        </div>
+                        
+                        <div class="form-group">
+                            <label for="new_password">New Password</label>
+                            <input type="password" id="new_password" name="new_password" class="form-control" required>
+                        </div>
+                        
+                        <div class="form-group">
+                            <label for="confirm_password">Confirm New Password</label>
+                            <input type="password" id="confirm_password" name="confirm_password" class="form-control" required>
+                        </div>
+                        
+                        <button type="submit" name="change_password" class="btn btn-primary">
+                            <i class="fas fa-key"></i> Change Password
+                        </button>
+                    </form>
+                </div>
+                
+                <div class="settings-section">
+                    <h2 class="settings-title">System Utilities</h2>
+                    <p style="margin-bottom: 15px;">These utilities help maintain and update the system database structure.</p>
+                    
+                    <a href="update_users_table.php" class="btn btn-primary" style="margin-right: 10px;">
+                        <i class="fas fa-database"></i> Update Users Table
+                    </a>
+                    
+                    <a href="setup_settings.php" class="btn btn-primary">
+                        <i class="fas fa-cogs"></i> Setup Settings Table
+                    </a>
+                </div>
+            </div>
+        </div>
+    </div>
+    
+    <script>
+        // Tab functionality
+        document.addEventListener('DOMContentLoaded', function() {
+            const tabButtons = document.querySelectorAll('.tab-button');
+            const tabContents = document.querySelectorAll('.tab-content');
+            
+            tabButtons.forEach(button => {
+                button.addEventListener('click', function() {
+                    // Remove active class from all buttons and contents
+                    tabButtons.forEach(btn => btn.classList.remove('active'));
+                    tabContents.forEach(content => content.classList.remove('active'));
+                    
+                    // Add active class to clicked button
+                    this.classList.add('active');
+                    
+                    // Show corresponding content
+                    const tabId = this.getAttribute('data-tab');
+                    document.getElementById(tabId).classList.add('active');
+                });
+            });
+        });
+    </script>
+</body>
+</html>

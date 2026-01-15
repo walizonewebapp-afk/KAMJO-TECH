@@ -1,0 +1,9 @@
+/* Fixed CSS with standard background-clip property */
+      font-size: 3rem;
+      font-weight: 700;
+      background: linear-gradient(135deg, var(--primary-color), var(--secondary-color));
+      -webkit-background-clip: text;
+      background-clip: text;  /* Added standard property for better compatibility */
+      -webkit-text-fill-color: transparent;
+      margin-bottom: 10px;
+      line-height: 1;

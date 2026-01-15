@@ -1,0 +1,620 @@
+<?php
+session_start();
+
+// Check if user is logged in and is an admin
+if (!isset($_SESSION['user_id']) || !isset($_SESSION['role']) || $_SESSION['role'] !== 'admin') {
+    header("Location: ../login.php");
+    exit;
+}
+
+// Include database connection
+require_once '../config/db.php';
+
+$userId = $_SESSION['user_id'];
+$message = '';
+$messageType = '';
+
+// Handle sending new message
+if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['send_message'])) {
+    $receiverId = isset($_POST['receiver_id']) ? (int)$_POST['receiver_id'] : null;
+    $subject = trim($_POST['subject']);
+    $messageContent = trim($_POST['message']);
+    
+    if (empty($subject) || empty($messageContent) || empty($receiverId)) {
+        $message = 'Please fill in all required fields.';
+        $messageType = 'error';
+    } else {
+        $stmt = $conn->prepare("INSERT INTO messages (sender_id, receiver_id, subject, message) VALUES (?, ?, ?, ?)");
+        $stmt->bind_param("iiss", $userId, $receiverId, $subject, $messageContent);
+        
+        if ($stmt->execute()) {
+            $message = 'Message sent successfully.';
+            $messageType = 'success';
+        } else {
+            $message = 'Error sending message: ' . $conn->error;
+            $messageType = 'error';
+        }
+        $stmt->close();
+    }
+}
+
+// Get all messages for admin
+$messages = [];
+$query = "
+    SELECT m.*, 
+           s.full_name as sender_name, 
+           r.full_name as receiver_name,
+           s.email as sender_email,
+           r.email as receiver_email
+    FROM messages m
+    LEFT JOIN users s ON m.sender_id = s.id
+    LEFT JOIN users r ON m.receiver_id = r.id
+    WHERE m.sender_id = ? OR m.receiver_id = ?
+    ORDER BY m.created_at DESC
+";
+
+$stmt = $conn->prepare($query);
+$stmt->bind_param("ii", $userId, $userId);
+$stmt->execute();
+$result = $stmt->get_result();
+
+while ($row = $result->fetch_assoc()) {
+    $messages[] = $row;
+}
+$stmt->close();
+
+// Get unread message count
+$unreadCount = 0;
+$stmt = $conn->prepare("SELECT COUNT(*) as count FROM messages WHERE receiver_id = ? AND is_read = 0");
+$stmt->bind_param("i", $userId);
+$stmt->execute();
+$result = $stmt->get_result();
+if ($row = $result->fetch_assoc()) {
+    $unreadCount = $row['count'];
+}
+$stmt->close();
+
+// Mark message as read
+if (isset($_GET['read']) && is_numeric($_GET['read'])) {
+    $messageId = (int)$_GET['read'];
+    
+    // Verify this message belongs to the current user
+    $stmt = $conn->prepare("SELECT id FROM messages WHERE id = ? AND receiver_id = ?");
+    $stmt->bind_param("ii", $messageId, $userId);
+    $stmt->execute();
+    $result = $stmt->get_result();
+    
+    if ($result->num_rows > 0) {
+        $conn->query("UPDATE messages SET is_read = 1 WHERE id = $messageId");
+    }
+    $stmt->close();
+}
+
+// Get message details if viewing a specific message
+$viewMessage = null;
+if (isset($_GET['view']) && is_numeric($_GET['view'])) {
+    $messageId = (int)$_GET['view'];
+    
+    // Verify this message belongs to the current user
+    $stmt = $conn->prepare("
+        SELECT m.*, 
+               s.full_name as sender_name, 
+               r.full_name as receiver_name,
+               s.email as sender_email,
+               r.email as receiver_email
+        FROM messages m
+        LEFT JOIN users s ON m.sender_id = s.id
+        LEFT JOIN users r ON m.receiver_id = r.id
+        WHERE m.id = ? AND (m.sender_id = ? OR m.receiver_id = ?)
+    ");
+    $stmt->bind_param("iii", $messageId, $userId, $userId);
+    $stmt->execute();
+    $result = $stmt->get_result();
+    
+    if ($result->num_rows > 0) {
+        $viewMessage = $result->fetch_assoc();
+        
+        // Mark as read if user is the receiver
+        if ($viewMessage['receiver_id'] == $userId && $viewMessage['is_read'] == 0) {
+            $conn->query("UPDATE messages SET is_read = 1 WHERE id = $messageId");
+        }
+    }
+    $stmt->close();
+}
+
+// Get all customers for sending messages
+$customers = [];
+$stmt = $conn->prepare("SELECT id, full_name, email FROM users WHERE role = 'customer' ORDER BY full_name");
+$stmt->execute();
+$result = $stmt->get_result();
+while ($row = $result->fetch_assoc()) {
+    $customers[] = $row;
+}
+$stmt->close();
+?>
+
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Messages - Walizone Autotech Admin</title>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0-beta3/css/all.min.css">
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+        }
+        
+        body {
+            display: flex;
+            background-color: #f0f0f0;
+            min-height: 100vh;
+        }
+        
+        /* Sidebar */
+        .sidebar {
+            width: 250px;
+            background-color: #0d47a1;
+            color: white;
+            height: 100vh;
+            position: fixed;
+            padding: 1rem;
+            overflow-y: auto;
+        }
+        
+        .sidebar-header {
+            padding: 1rem 0;
+            text-align: center;
+            border-bottom: 1px solid #1565c0;
+            margin-bottom: 1rem;
+        }
+        
+        .sidebar-menu {
+            list-style: none;
+        }
+        
+        .sidebar-menu li {
+            margin-bottom: 0.5rem;
+        }
+        
+        .sidebar-menu a {
+            color: white;
+            text-decoration: none;
+            display: block;
+            padding: 0.75rem;
+            border-radius: 5px;
+            transition: background 0.3s;
+        }
+        
+        .sidebar-menu a:hover, .sidebar-menu a.active {
+            background-color: #1565c0;
+        }
+        
+        .sidebar-menu i {
+            margin-right: 0.5rem;
+            width: 20px;
+            text-align: center;
+        }
+        
+        /* Main Content */
+        .main-content {
+            flex: 1;
+            margin-left: 250px;
+            padding: 2rem;
+        }
+        
+        .header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 2rem;
+        }
+        
+        .user-info {
+            display: flex;
+            align-items: center;
+        }
+        
+        .user-info img {
+            width: 40px;
+            height: 40px;
+            border-radius: 50%;
+            margin-right: 1rem;
+        }
+        
+        /* Alert Messages */
+        .alert {
+            padding: 1rem;
+            border-radius: 5px;
+            margin-bottom: 1.5rem;
+        }
+        
+        .alert-success {
+            background-color: #e8f5e9;
+            color: #388e3c;
+            border: 1px solid #c8e6c9;
+        }
+        
+        .alert-error {
+            background-color: #ffebee;
+            color: #d32f2f;
+            border: 1px solid #ffcdd2;
+        }
+        
+        /* Messages Styles */
+        .messages-container {
+            display: flex;
+            gap: 20px;
+        }
+        
+        .message-sidebar {
+            flex: 1;
+            background-color: white;
+            border-radius: 10px;
+            padding: 1.5rem;
+            box-shadow: 0 2px 10px rgba(0, 0, 0, 0.1);
+            max-height: 70vh;
+            overflow-y: auto;
+        }
+        
+        .message-content {
+            flex: 2;
+            background-color: white;
+            border-radius: 10px;
+            padding: 1.5rem;
+            box-shadow: 0 2px 10px rgba(0, 0, 0, 0.1);
+        }
+        
+        .message-list {
+            list-style: none;
+        }
+        
+        .message-item {
+            padding: 1rem;
+            border-bottom: 1px solid #eee;
+            cursor: pointer;
+            transition: background 0.3s;
+        }
+        
+        .message-item:hover {
+            background-color: #f5f5f5;
+        }
+        
+        .message-item.unread {
+            background-color: #e3f2fd;
+        }
+        
+        .message-item.active {
+            background-color: #bbdefb;
+        }
+        
+        .message-header {
+            display: flex;
+            justify-content: space-between;
+            margin-bottom: 0.5rem;
+        }
+        
+        .message-sender {
+            font-weight: bold;
+        }
+        
+        .message-date {
+            color: #757575;
+            font-size: 0.8rem;
+        }
+        
+        .message-subject {
+            margin-bottom: 0.5rem;
+        }
+        
+        .message-preview {
+            color: #757575;
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+        }
+        
+        .message-view {
+            margin-top: 1rem;
+        }
+        
+        .message-view-header {
+            border-bottom: 1px solid #eee;
+            padding-bottom: 1rem;
+            margin-bottom: 1.5rem;
+        }
+        
+        .message-view-subject {
+            font-size: 1.2rem;
+            font-weight: bold;
+            margin-bottom: 0.5rem;
+        }
+        
+        .message-view-info {
+            display: flex;
+            justify-content: space-between;
+            color: #757575;
+        }
+        
+        .message-view-body {
+            line-height: 1.6;
+            margin-bottom: 2rem;
+        }
+        
+        .tabs {
+            display: flex;
+            margin-bottom: 1.5rem;
+        }
+        
+        .tab {
+            padding: 0.75rem 1.5rem;
+            background-color: #f5f5f5;
+            border: 1px solid #ddd;
+            cursor: pointer;
+        }
+        
+        .tab:first-child {
+            border-radius: 5px 0 0 5px;
+        }
+        
+        .tab:last-child {
+            border-radius: 0 5px 5px 0;
+        }
+        
+        .tab.active {
+            background-color: #0d47a1;
+            color: white;
+            border-color: #0d47a1;
+        }
+        
+        .tab-content {
+            display: none;
+        }
+        
+        .tab-content.active {
+            display: block;
+        }
+        
+        .form-group {
+            margin-bottom: 1.5rem;
+        }
+        
+        .form-group label {
+            display: block;
+            margin-bottom: 0.5rem;
+            font-weight: 500;
+        }
+        
+        .form-control {
+            width: 100%;
+            padding: 0.75rem;
+            border: 1px solid #ddd;
+            border-radius: 5px;
+            font-size: 1rem;
+        }
+        
+        .form-control:focus {
+            outline: none;
+            border-color: #0d47a1;
+        }
+        
+        textarea.form-control {
+            min-height: 150px;
+            resize: vertical;
+        }
+        
+        .btn {
+            padding: 0.75rem 1.5rem;
+            border: none;
+            border-radius: 5px;
+            cursor: pointer;
+            font-size: 1rem;
+            transition: background 0.3s;
+        }
+        
+        .btn-primary {
+            background-color: #0d47a1;
+            color: white;
+        }
+        
+        .btn-primary:hover {
+            background-color: #1565c0;
+        }
+        
+        .badge {
+            display: inline-block;
+            background-color: #f44336;
+            color: white;
+            border-radius: 50%;
+            padding: 2px 6px;
+            font-size: 0.7rem;
+            margin-left: 5px;
+        }
+        
+        .reply-form {
+            margin-top: 2rem;
+            padding-top: 1.5rem;
+            border-top: 1px solid #eee;
+        }
+    </style>
+</head>
+<body>
+    <div class="sidebar">
+        <div class="sidebar-header">
+            <h2>Walizone Admin</h2>
+        </div>
+        <ul class="sidebar-menu">
+            <li><a href="index.php"><i class="fas fa-tachometer-alt"></i> <span>Dashboard</span></a></li>
+            <li><a href="messages.php" class="active"><i class="fas fa-envelope"></i> <span>Messages</span> <?php if ($unreadCount > 0): ?><span class="badge"><?php echo $unreadCount; ?></span><?php endif; ?></a></li>
+            <li><a href="appointments.php"><i class="fas fa-calendar-check"></i> <span>Appointments</span></a></li>
+            <li><a href="services.php"><i class="fas fa-wrench"></i> <span>Services</span></a></li>
+            <li><a href="vehicles.php"><i class="fas fa-car"></i> <span>Vehicles</span></a></li>
+            <li><a href="customers.php"><i class="fas fa-users"></i> <span>Customers</span></a></li>
+            <li><a href="settings.php"><i class="fas fa-cog"></i> <span>Settings</span></a></li>
+            <li><a href="logout.php"><i class="fas fa-sign-out-alt"></i> <span>Logout</span></a></li>
+        </ul>
+    </div>
+    
+    <div class="main-content">
+        <div class="header">
+            <h1>Messages <?php if ($unreadCount > 0): ?><span class="badge"><?php echo $unreadCount; ?></span><?php endif; ?></h1>
+            <div class="user-info">
+                <img src="https://via.placeholder.com/40" alt="Admin">
+                <span>Admin</span>
+            </div>
+        </div>
+        
+        <?php if (!empty($message)): ?>
+            <div class="alert alert-<?php echo $messageType; ?>">
+                <?php echo $message; ?>
+            </div>
+        <?php endif; ?>
+        
+        <div class="tabs">
+            <div class="tab <?php echo !isset($_GET['compose']) ? 'active' : ''; ?>" data-tab="inbox">Inbox</div>
+            <div class="tab <?php echo isset($_GET['compose']) ? 'active' : ''; ?>" data-tab="compose">Compose New Message</div>
+        </div>
+        
+        <div class="tab-content <?php echo !isset($_GET['compose']) ? 'active' : ''; ?>" id="inbox">
+            <?php if (empty($messages)): ?>
+                <div style="text-align: center; padding: 2rem;">
+                    <i class="fas fa-envelope-open" style="font-size: 3rem; color: #bbdefb; margin-bottom: 1rem;"></i>
+                    <p>No messages found.</p>
+                </div>
+            <?php else: ?>
+                <div class="messages-container">
+                    <div class="message-sidebar">
+                        <ul class="message-list">
+                            <?php foreach ($messages as $msg): ?>
+                                <?php 
+                                $isUnread = $msg['is_read'] == 0 && $msg['receiver_id'] == $userId;
+                                $isActive = isset($_GET['view']) && $_GET['view'] == $msg['id'];
+                                ?>
+                                <li class="message-item <?php echo $isUnread ? 'unread' : ''; ?> <?php echo $isActive ? 'active' : ''; ?>">
+                                    <a href="messages.php?view=<?php echo $msg['id']; ?>" style="text-decoration: none; color: inherit; display: block;">
+                                        <div class="message-header">
+                                            <span class="message-sender">
+                                                <?php 
+                                                if ($msg['sender_id'] == $userId) {
+                                                    echo 'To: ' . htmlspecialchars($msg['receiver_name']);
+                                                } else {
+                                                    echo 'From: ' . htmlspecialchars($msg['sender_name']);
+                                                }
+                                                ?>
+                                            </span>
+                                            <span class="message-date"><?php echo date('M d, Y', strtotime($msg['created_at'])); ?></span>
+                                        </div>
+                                        <div class="message-subject"><?php echo htmlspecialchars($msg['subject']); ?></div>
+                                        <div class="message-preview"><?php echo htmlspecialchars(substr($msg['message'], 0, 50)) . (strlen($msg['message']) > 50 ? '...' : ''); ?></div>
+                                    </a>
+                                </li>
+                            <?php endforeach; ?>
+                        </ul>
+                    </div>
+                    
+                    <div class="message-content">
+                        <?php if ($viewMessage): ?>
+                            <div class="message-view">
+                                <div class="message-view-header">
+                                    <div class="message-view-subject"><?php echo htmlspecialchars($viewMessage['subject']); ?></div>
+                                    <div class="message-view-info">
+                                        <div>
+                                            <?php 
+                                            if ($viewMessage['sender_id'] == $userId) {
+                                                echo 'To: ' . htmlspecialchars($viewMessage['receiver_name']) . ' (' . htmlspecialchars($viewMessage['receiver_email']) . ')';
+                                            } else {
+                                                echo 'From: ' . htmlspecialchars($viewMessage['sender_name']) . ' (' . htmlspecialchars($viewMessage['sender_email']) . ')';
+                                            }
+                                            ?>
+                                        </div>
+                                        <div><?php echo date('F d, Y h:i A', strtotime($viewMessage['created_at'])); ?></div>
+                                    </div>
+                                </div>
+                                
+                                <div class="message-view-body">
+                                    <?php echo nl2br(htmlspecialchars($viewMessage['message'])); ?>
+                                </div>
+                                
+                                <?php if ($viewMessage['sender_id'] != $userId): ?>
+                                    <div class="reply-form">
+                                        <h3>Reply</h3>
+                                        <form method="POST" action="">
+                                            <input type="hidden" name="receiver_id" value="<?php echo $viewMessage['sender_id']; ?>">
+                                            <input type="hidden" name="subject" value="RE: <?php echo htmlspecialchars($viewMessage['subject']); ?>">
+                                            
+                                            <div class="form-group">
+                                                <label for="message">Your Reply</label>
+                                                <textarea name="message" id="message" class="form-control" required></textarea>
+                                            </div>
+                                            
+                                            <button type="submit" name="send_message" class="btn btn-primary">Send Reply</button>
+                                        </form>
+                                    </div>
+                                <?php endif; ?>
+                            </div>
+                        <?php else: ?>
+                            <div style="text-align: center; padding: 2rem;">
+                                <i class="fas fa-envelope" style="font-size: 3rem; color: #bbdefb; margin-bottom: 1rem;"></i>
+                                <p>Select a message to view its contents.</p>
+                            </div>
+                        <?php endif; ?>
+                    </div>
+                </div>
+            <?php endif; ?>
+        </div>
+        
+        <div class="tab-content <?php echo isset($_GET['compose']) ? 'active' : ''; ?>" id="compose">
+            <div style="background-color: white; border-radius: 10px; padding: 1.5rem; box-shadow: 0 2px 10px rgba(0, 0, 0, 0.1);">
+                <h2 style="margin-bottom: 1.5rem; color: #0d47a1;">Compose New Message</h2>
+                
+                <form method="POST" action="">
+                    <div class="form-group">
+                        <label for="receiver_id">To</label>
+                        <select name="receiver_id" id="receiver_id" class="form-control" required>
+                            <option value="">Select Customer</option>
+                            <?php foreach ($customers as $customer): ?>
+                                <option value="<?php echo $customer['id']; ?>"><?php echo htmlspecialchars($customer['full_name']) . ' (' . htmlspecialchars($customer['email']) . ')'; ?></option>
+                            <?php endforeach; ?>
+                        </select>
+                    </div>
+                    
+                    <div class="form-group">
+                        <label for="subject">Subject</label>
+                        <input type="text" name="subject" id="subject" class="form-control" required>
+                    </div>
+                    
+                    <div class="form-group">
+                        <label for="message">Message</label>
+                        <textarea name="message" id="message" class="form-control" required></textarea>
+                    </div>
+                    
+                    <button type="submit" name="send_message" class="btn btn-primary">Send Message</button>
+                </form>
+            </div>
+        </div>
+    </div>
+    
+    <script>
+        // Tab functionality
+        const tabs = document.querySelectorAll('.tab');
+        const tabContents = document.querySelectorAll('.tab-content');
+        
+        tabs.forEach(tab => {
+            tab.addEventListener('click', () => {
+                const tabId = tab.getAttribute('data-tab');
+                
+                // Remove active class from all tabs and contents
+                tabs.forEach(t => t.classList.remove('active'));
+                tabContents.forEach(c => c.classList.remove('active'));
+                
+                // Add active class to clicked tab and corresponding content
+                tab.classList.add('active');
+                document.getElementById(tabId).classList.add('active');
+            });
+        });
+    </script>
+</body>
+</html>

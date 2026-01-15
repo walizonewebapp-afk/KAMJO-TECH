@@ -1,0 +1,16 @@
+{
+  "name": "Walizone Autotech Enterprise",
+  "short_name": "Walizone",
+  "description": "Professional automotive services in Chinsali, Zambia",
+  "start_url": "/index.php",
+  "display": "standalone",
+  "background_color": "#f5f5f5",
+  "theme_color": "#0d47a1",
+  "icons": [
+    {
+      "src": "images/favicon.svg",
+      "sizes": "192x192",
+      "type": "image/svg+xml"
+    }
+  ]
+}

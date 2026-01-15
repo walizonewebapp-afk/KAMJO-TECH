@@ -1,0 +1,10 @@
+User-agent: *
+Allow: /
+Disallow: /admin/
+Disallow: /config/
+Disallow: /database/
+Disallow: /images/favicon.svg
+Disallow: /images/logo.svg
+
+# Sitemap location
+Sitemap: https://yourdomain.com/sitemap.xml
